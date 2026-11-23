@@ -84,6 +84,9 @@ struct ContentView: View {
         .sheet(item: $store.addingToPlaylist) { adding in
             PlaylistPicker(adding: adding).environmentObject(store)
         }
+        .sheet(item: $store.sharing) { target in
+            ShareSheet(target: target).environmentObject(store)
+        }
         .sheet(item: $store.prompt, onDismiss: store.promptDismissed) { pending in
             PromptView(pending: pending)
                 .environmentObject(store)

@@ -187,6 +187,7 @@ pub(crate) const ARTIST_COLUMNS_LEAN: &[ColumnSpec<TrackField>] = &[
 
 pub(crate) const ALBUM_COLUMNS: &[ColumnSpec<TrackField>] = &[
     INDEX,
+    COVER,
     ALBUM_TITLE,
     ALBUM_ARTISTS,
     ALBUM_PLAYCOUNT,
@@ -194,7 +195,7 @@ pub(crate) const ALBUM_COLUMNS: &[ColumnSpec<TrackField>] = &[
 ];
 
 pub(crate) const ALBUM_COLUMNS_LEAN: &[ColumnSpec<TrackField>] =
-    &[INDEX, ALBUM_TITLE, ALBUM_ARTISTS, ALBUM_DURATION];
+    &[INDEX, COVER, ALBUM_TITLE, ALBUM_ARTISTS, ALBUM_DURATION];
 
 pub(crate) fn playlist_columns(blend: bool, shared: bool) -> &'static [ColumnSpec<TrackField>] {
     match (blend, shared) {

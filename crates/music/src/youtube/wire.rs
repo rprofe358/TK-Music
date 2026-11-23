@@ -82,16 +82,25 @@ pub fn album(source: ytmusic::Album) -> Album {
 }
 
 pub fn album_detail(source: ytmusic::AlbumDetail) -> AlbumDetail {
+    let album = album(source.album);
+    let album_cover = album.cover.clone();
     let tracks = source
         .tracks
         .into_iter()
         .enumerate()
-        .map(|(index, item)| track(item, index as u32))
+        .map(|(index, item)| {
+            let mut track = track(item, index as u32);
+            let bad = track
+                .cover
+                .as_deref()
+                .is_none_or(crate::artwork::is_video_or_artist_image);
+            if bad && let Some(cover) = &album_cover {
+                track.cover = Some(cover.clone());
+            }
+            track
+        })
         .collect();
-    AlbumDetail {
-        album: album(source.album),
-        tracks,
-    }
+    AlbumDetail { album, tracks }
 }
 
 pub fn playlist(source: ytmusic::Playlist, owned: bool, public: bool) -> Playlist {
@@ -203,10 +212,23 @@ pub fn cover_large(thumbnails: &[ytmusic::Thumbnail]) -> Option<String> {
         .map(|thumb| resized(&thumb.url, COVER_LARGE))
 }
 
+/// A cover at another size, worked out from its url alone. Video frames and non-square artist
+/// portraits return `None` so callers fetch the real album cover instead.
+pub fn cover_at(url: &str, size: crate::CoverSize) -> Option<String> {
+    if crate::artwork::is_video_or_artist_image(url) || !url.contains(".googleusercontent.com/") {
+        return None;
+    }
+    let edge = match size {
+        crate::CoverSize::Large => 1200,
+        crate::CoverSize::Full => 1920,
+    };
+    Some(resized(url, edge))
+}
+
 /// Rewrites the `=w<width>-h<height>` options of a googleusercontent url so its longer edge is
 /// at least `edge`, keeping the aspect and every other option. Any other url, or one already
 /// that large, comes back unchanged.
-fn resized(url: &str, edge: u32) -> String {
+pub fn resized(url: &str, edge: u32) -> String {
     let Some((base, options)) = url.rsplit_once('=') else {
         return url.to_owned();
     };

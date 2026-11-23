@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 // MARK: - Navegación
@@ -183,6 +184,18 @@ struct TrackMenu: ViewModifier {
             }
             DownloadButton(track: track, slug: slug)
             DiscordButton(track: track, slug: slug)
+            Button {
+                store.share(
+                    .track,
+                    id: track.id,
+                    from: slug,
+                    title: track.title,
+                    subtitle: track.artists,
+                    cover: track.cover
+                )
+            } label: {
+                Label("Compartir…", systemImage: "square.and.arrow.up")
+            }
             Button {
                 store.addingToPlaylist = PendingAdd(slug: slug, tracks: [track])
             } label: {
@@ -1017,7 +1030,7 @@ struct AlbumView: View {
         Loader(key: id, load: { try $0.album(slug: slug, id: id) }) { page in
             List {
                 VStack(spacing: 8) {
-                    Cover(url: page.album.coverLarge, size: 220)
+                    Cover(url: page.album.coverLarge ?? page.album.cover, size: 220)
                         .shadow(radius: 8, y: 4)
                     Text(page.album.title)
                         .font(.title3.bold())
@@ -1037,7 +1050,7 @@ struct AlbumView: View {
                 .frame(maxWidth: .infinity)
                 .listRowSeparator(.hidden)
                 PlayButtons(tracks: page.tracks, slug: slug)
-                TrackList(tracks: page.tracks, slug: slug, numbered: true, covers: false)
+                TrackList(tracks: page.tracks, slug: slug, numbered: true, covers: true)
                 if !page.label.isEmpty || !page.releaseDate.isEmpty {
                     Text([page.releaseDate, page.label].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.footnote)
@@ -1047,7 +1060,19 @@ struct AlbumView: View {
             }
             .listStyle(.plain)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        store.share(
+                            .album,
+                            id: page.album.id,
+                            from: slug,
+                            title: page.album.title,
+                            subtitle: page.album.artists,
+                            cover: page.album.coverLarge ?? page.album.cover
+                        )
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
                     Button {
                         store.save(.album, id: id, from: slug)
                     } label: {
@@ -1082,9 +1107,13 @@ struct PlaylistBody: View {
     @State private var continuation: String?
     @State private var loading = false
     @State private var title: String
+    @State private var isPublic: Bool
+    @State private var cover: String?
+    @State private var filter = ""
     @State private var renaming = false
     @State private var newName = ""
     @State private var confirmDelete = false
+    @State private var pickedPhoto: PhotosPickerItem?
     @Environment(\.dismiss) private var dismiss
 
     init(page: PlaylistPage, slug: String) {
@@ -1093,22 +1122,53 @@ struct PlaylistBody: View {
         _tracks = State(initialValue: page.tracks)
         _continuation = State(initialValue: page.continuation)
         _title = State(initialValue: page.playlist.title)
+        _isPublic = State(initialValue: page.playlist.isPublic)
+        _cover = State(initialValue: page.playlist.cover)
+    }
+
+    private var visible: [TrackItem] {
+        let q = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return tracks }
+        return tracks.filter {
+            $0.title.localizedCaseInsensitiveContains(q)
+                || $0.artists.localizedCaseInsensitiveContains(q)
+                || $0.album.localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private var summary: String {
+        var parts: [String] = []
+        if !page.playlist.owner.isEmpty { parts.append(page.playlist.owner) }
+        let count = max(tracks.count, Int(page.playlist.trackCount))
+        if count > 0 { parts.append(count == 1 ? "1 canción" : "\(count) canciones") }
+        let totalMs = tracks.reduce(UInt64(0)) { $0 + $1.durationMs }
+        if totalMs > 0 {
+            let mins = totalMs / 60_000
+            parts.append(mins >= 60 ? "\(mins / 60) h \(mins % 60) min" : "\(mins) min")
+        }
+        if page.playlist.owned { parts.append(isPublic ? "Pública" : "Privada") }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
         List {
             VStack(spacing: 8) {
-                Cover(url: page.playlist.cover, size: 220)
+                Cover(url: cover, size: 220)
                     .shadow(radius: 8, y: 4)
                 Text(title)
                     .font(.title3.bold())
                     .multilineTextAlignment(.center)
-                Text(page.playlist.owner).foregroundStyle(.secondary)
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
-            PlayButtons(tracks: tracks, slug: slug)
-            TrackList(tracks: tracks, slug: slug, onRemove: removal)
+            PlayButtons(tracks: visible, slug: slug)
+            TrackList(tracks: visible, slug: slug, onRemove: removal)
             if let continuation {
                 Button(loading ? "Cargando…" : "Cargar más") { more(continuation) }
                     .disabled(loading)
@@ -1116,8 +1176,34 @@ struct PlaylistBody: View {
             }
         }
         .listStyle(.plain)
+        .searchable(text: $filter, prompt: "Filtrar canciones")
+        .onChange(of: pickedPhoto) { item in
+            guard let item else { return }
+            Task {
+                defer { pickedPhoto = nil }
+                guard let data = try? await item.loadTransferable(type: Data.self) else {
+                    store.problem = "No se pudo leer la imagen."
+                    return
+                }
+                if await store.setPlaylistCover(page.playlist.id, image: data, in: slug) {
+                    store.problem = "Portada actualizada."
+                }
+            }
+        }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    store.share(
+                        .playlist,
+                        id: page.playlist.id,
+                        from: slug,
+                        title: title,
+                        subtitle: page.playlist.owner,
+                        cover: cover
+                    )
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
                 if page.playlist.owned {
                     Menu {
                         Button {
@@ -1125,6 +1211,34 @@ struct PlaylistBody: View {
                             renaming = true
                         } label: {
                             Label("Renombrar", systemImage: "pencil")
+                        }
+                        Button {
+                            let next = !isPublic
+                            Task {
+                                if await store.setPlaylistPublic(page.playlist.id, public: next, in: slug) {
+                                    isPublic = next
+                                }
+                            }
+                        } label: {
+                            Label(
+                                isPublic ? "Hacer privada" : "Hacer pública",
+                                systemImage: isPublic ? "lock" : "globe"
+                            )
+                        }
+                        if store.canSetPlaylistCover(in: slug) {
+                            PhotosPicker(selection: $pickedPhoto, matching: .images) {
+                                Label("Cambiar portada", systemImage: "photo")
+                            }
+                            Button {
+                                Task {
+                                    if await store.setPlaylistCover(page.playlist.id, image: nil, in: slug) {
+                                        cover = nil
+                                        store.problem = "Portada quitada."
+                                    }
+                                }
+                            } label: {
+                                Label("Quitar portada", systemImage: "xmark.circle")
+                            }
                         }
                         Button(role: .destructive) {
                             confirmDelete = true
@@ -1171,12 +1285,14 @@ struct PlaylistBody: View {
     }
 
     private func remove(_ index: Int) {
-        guard tracks.indices.contains(index) else { return }
-        let track = tracks[index]
-        tracks.remove(at: index)
+        let shown = visible
+        guard shown.indices.contains(index) else { return }
+        let track = shown[index]
+        guard let realIndex = tracks.firstIndex(where: { $0.id == track.id }) else { return }
+        tracks.remove(at: realIndex)
         Task {
             if !(await store.removeFromPlaylist(page.playlist.id, track: track.id, in: slug)) {
-                tracks.insert(track, at: min(index, tracks.count))
+                tracks.insert(track, at: min(realIndex, tracks.count))
             }
         }
     }
@@ -1250,6 +1366,22 @@ struct ArtistView: View {
                 }
             }
             .listStyle(.plain)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        store.share(
+                            .artist,
+                            id: page.id,
+                            from: slug,
+                            title: page.name,
+                            subtitle: "",
+                            cover: page.cover
+                        )
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .withPlayerBar()

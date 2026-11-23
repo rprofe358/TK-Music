@@ -17,8 +17,6 @@ android {
         versionCode = 1000 + (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toInt()
         // En una versión publicada (etiqueta v1.2.3) el nombre es el de la etiqueta.
         versionName = System.getenv("TK_VERSION") ?: "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
-        // Celulares, TV y proyectores son ARM; TK_ABIS=x86_64 arma la versión para el emulador del PC.
-        ndk { abiFilters += (System.getenv("TK_ABIS")?.split(",") ?: listOf("arm64-v8a", "armeabi-v7a")) }
     }
 
     // Una clave fija, para que cada APK nuevo se instale encima del anterior.
@@ -35,9 +33,13 @@ android {
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("sonora")
+            // Celulares, TV y proyectores son ARM; TK_ABIS=x86_64 arma la versión para el emulador del PC.
+            ndk { abiFilters += (System.getenv("TK_ABIS")?.split(",") ?: listOf("arm64-v8a", "armeabi-v7a")) }
         }
         debug {
             signingConfig = signingConfigs.getByName("sonora")
+            // En depuración local (Android Studio) incluye x86_64 para que el emulador arranque sin variables extra.
+            ndk { abiFilters += (System.getenv("TK_ABIS")?.split(",") ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")) }
         }
     }
 

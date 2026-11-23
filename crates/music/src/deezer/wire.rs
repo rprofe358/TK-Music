@@ -103,6 +103,26 @@ pub fn image(kind: &str, md5: Option<&str>, size: u32) -> Option<String> {
     ))
 }
 
+/// A cover at another size, worked out from its url alone.
+pub fn cover_at(url: &str, size: crate::CoverSize) -> Option<String> {
+    let dim = match size {
+        crate::CoverSize::Large => 1000,
+        crate::CoverSize::Full => 1400,
+    };
+    if let Some(pos) = url.find("dzcdn.net/images/") {
+        let path = &url[pos + "dzcdn.net/images/".len()..];
+        let mut parts = path.split('/');
+        let kind = parts.next()?;
+        let md5 = parts.next()?;
+        if kind != "artist" && hashed(md5) {
+            return Some(format!(
+                "https://cdn-images.dzcdn.net/images/{kind}/{md5}/{dim}x{dim}-000000-80-0-0.jpg"
+            ));
+        }
+    }
+    None
+}
+
 /// Whether a picture field is the hash an image url is built from. The public api answers
 /// several of them with a link to the image instead, and a link cannot stand in for a hash.
 /// A collage is several hashes joined by `-`, so each part is checked on its own.

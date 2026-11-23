@@ -18,6 +18,7 @@ use crate::shared::confirm::Confirm;
 use crate::shared::local;
 use crate::shared::pins::Pinned as _;
 use crate::shared::playlist_editor::{Edit, PlaylistEditor};
+use crate::shared::share_sheet::{ShareSheet, ShareTarget};
 use crate::shared::tag_editor::TagEditor;
 
 /// The narrowest the menu of one song, album, artist or playlist gets, which is wide enough for
@@ -341,6 +342,17 @@ impl ItemMenu {
             true => Shelf::Local,
             false => Shelf::Streaming,
         };
+        let share = (!many).then(|| {
+            share_item(
+                "share-track",
+                MediaKind::Track,
+                track.id.as_deref(),
+                track.name.clone(),
+                track.artists.clone(),
+                track.cover.clone(),
+                cx,
+            )
+        });
         let copy = (!many)
             .then(|| copy_link_item("copy-track-link", MediaKind::Track, track.id.as_deref(), cx));
         let queued: Vec<Track> = tracks
@@ -507,6 +519,7 @@ impl ItemMenu {
                 details
                     .into_iter()
                     .chain(edit)
+                    .chain(share)
                     .chain(copy)
                     .chain(delete_files)
                     .collect(),
@@ -1034,12 +1047,18 @@ pub(crate) fn album_menu(
             ),
             vec![add_to_playlist],
             collection_queue_items(from, playback),
-            vec![copy_link_item(
-                "copy-album-link",
-                MediaKind::Album,
-                Some(&album_id),
-                cx,
-            )],
+            vec![
+                share_item(
+                    "share-album",
+                    MediaKind::Album,
+                    Some(&album_id),
+                    album.name.clone(),
+                    album.artists.clone(),
+                    album.cover.clone().or_else(|| album.cover_large.clone()),
+                    cx,
+                ),
+                copy_link_item("copy-album-link", MediaKind::Album, Some(&album_id), cx),
+            ],
         ],
     )
 }
@@ -1114,12 +1133,18 @@ pub(crate) fn artist_menu(
             .into_iter()
             .chain(collection_queue_items(queued_from, playback))
             .collect(),
-            vec![copy_link_item(
-                "copy-artist-link",
-                MediaKind::Artist,
-                Some(&artist_id),
-                cx,
-            )],
+            vec![
+                share_item(
+                    "share-artist",
+                    MediaKind::Artist,
+                    Some(&artist_id),
+                    artist.name.clone(),
+                    String::new(),
+                    artist.cover.clone(),
+                    cx,
+                ),
+                copy_link_item("copy-artist-link", MediaKind::Artist, Some(&artist_id), cx),
+            ],
         ],
     )
 }
@@ -1213,9 +1238,10 @@ pub(crate) fn playlist_menu(playlist: Playlist, playback: Entity<Playback>, cx: 
                     }),
             ])
             .chain(imported.then(|| {
+                let exported = playlist.clone();
                 MenuItem::new("export-playlist", t!("menu-export-playlist"))
                     .icon("icons/square-arrow-out-up-right.svg")
-                    .on_click(move |_, _, cx| local::export_playlist(playlist.clone(), cx))
+                    .on_click(move |_, _, cx| local::export_playlist(exported.clone(), cx))
             }))
             .collect(),
         false => Vec::new(),
@@ -1229,12 +1255,18 @@ pub(crate) fn playlist_menu(playlist: Playlist, playback: Entity<Playback>, cx: 
             actions,
             match imported {
                 true => Vec::new(),
-                false => vec![copy_link_item(
-                    "copy-playlist-link",
-                    MediaKind::Playlist,
-                    Some(&copied),
-                    cx,
-                )],
+                false => vec![
+                    share_item(
+                        "share-playlist",
+                        MediaKind::Playlist,
+                        Some(&copied),
+                        playlist.name,
+                        playlist.owner,
+                        playlist.cover,
+                        cx,
+                    ),
+                    copy_link_item("copy-playlist-link", MediaKind::Playlist, Some(&copied), cx),
+                ],
             },
         ],
     )
@@ -1296,7 +1328,18 @@ fn sparse_menu(pin: &Pin, playback: Entity<Playback>, cx: &App) -> Menu {
         vec![
             vec![open],
             transport_items(pin, playback),
-            vec![copy_link_item("copy-pin-link", kind, Some(&copied), cx)],
+            vec![
+                share_item(
+                    "share-pin",
+                    kind,
+                    Some(&copied),
+                    pin.title.clone(),
+                    String::new(),
+                    pin.cover.clone(),
+                    cx,
+                ),
+                copy_link_item("copy-pin-link", kind, Some(&copied), cx),
+            ],
             vec![pin_action(pin, cx)],
         ],
     )
@@ -1416,6 +1459,35 @@ fn saved_track(id: &str, cx: &App) -> Option<Track> {
         .iter()
         .find(|track| track.id.as_deref() == Some(id))
         .cloned()
+}
+
+/// The Share item, which opens the share sheet with the resolved link and item preview.
+fn share_item(
+    id: &'static str,
+    kind: MediaKind,
+    target: Option<&str>,
+    title: String,
+    subtitle: String,
+    cover: Option<String>,
+    cx: &App,
+) -> MenuItem {
+    let item = MenuItem::new(id, t!("menu-share")).icon("icons/square-arrow-out-up-right.svg");
+    match share_link(kind, target, cx) {
+        Ok(url) => item.on_click(move |_, window, cx| {
+            ShareSheet::open(
+                ShareTarget {
+                    title: title.clone(),
+                    subtitle: subtitle.clone(),
+                    cover: cover.clone(),
+                    url: url.clone(),
+                    kind,
+                },
+                window,
+                cx,
+            );
+        }),
+        Err(reason) => item.disabled().tooltip(reason),
+    }
 }
 
 /// The Copy link item. The link is made while the menu is built, so an item with no link shows

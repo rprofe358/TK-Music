@@ -219,7 +219,15 @@ impl CatalogSource {
     }
 
     pub(crate) async fn album(&self, id: &str) -> Result<Arc<AlbumDetail>> {
-        self.albums.load(id, self.backend.album(id)).await
+        let backend = self.backend.clone();
+        let wanted = id.to_owned();
+        self.albums
+            .load(id, async move {
+                let mut detail = backend.album(&wanted).await?;
+                fix_album_artwork(&mut detail).await;
+                Ok(detail)
+            })
+            .await
     }
 
     pub(crate) async fn invalidate_album(&self, id: &str) {
@@ -388,6 +396,41 @@ impl CatalogSource {
                 })
             })
             .await
+    }
+}
+
+/// Replaces a missing, video-frame, or artist-portrait album cover with official artwork from
+/// public catalogues, and propagates the album cover to any tracks that lack a valid one.
+async fn fix_album_artwork(detail: &mut AlbumDetail) {
+    let cover_bad = detail
+        .album
+        .cover_large
+        .as_deref()
+        .or(detail.album.cover.as_deref())
+        .is_none_or(music::artwork::is_video_or_artist_image);
+    if cover_bad
+        && let Some(query) = music::artwork::ArtworkQuery::for_album(&detail.album)
+        && let Ok(Some(url)) = music::artwork::ArtworkSearch::new().find(&query).await
+    {
+        detail.album.cover = Some(url.clone());
+        detail.album.cover_large = Some(url);
+    }
+    let album_cover = detail
+        .album
+        .cover
+        .clone()
+        .or_else(|| detail.album.cover_large.clone())
+        .filter(|url| !music::artwork::is_video_or_artist_image(url));
+    if let Some(cover) = album_cover {
+        for track in &mut detail.tracks {
+            let bad = track
+                .cover
+                .as_deref()
+                .is_none_or(music::artwork::is_video_or_artist_image);
+            if bad {
+                track.cover = Some(cover.clone());
+            }
+        }
     }
 }
 

@@ -238,6 +238,7 @@ fun SonoraRoot() {
         UpdateDialog()
         Store.prompt?.let { PromptDialog(it) }
         Store.adding?.let { PlaylistPicker(it) }
+        Store.sharing?.let { ShareSheet(it) { Store.sharing = null } }
         Store.problem?.let { message ->
             AlertDialog(
                 onDismissRequest = { Store.problem = null },

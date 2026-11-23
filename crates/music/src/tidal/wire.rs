@@ -115,6 +115,18 @@ pub fn image(uuid: Option<&str>, size: u32) -> Option<String> {
     ))
 }
 
+/// A cover at another size, worked out from its url alone.
+pub fn cover_at(url: &str, _size: crate::CoverSize) -> Option<String> {
+    if !url.contains("resources.tidal.com/images/") {
+        return None;
+    }
+    if let Some(pos) = url.rfind('/') {
+        let base = &url[..pos];
+        return Some(format!("{base}/1280x1280.jpg"));
+    }
+    None
+}
+
 /// A track out of a bare or wrapped track object. Videos, which share playlists and mixes
 /// with tracks, are left out.
 pub fn track(wrapper: &Value) -> Option<Track> {

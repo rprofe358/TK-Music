@@ -31,6 +31,16 @@ data class PendingPrompt(val slug: String, val prompt: Prompt, val id: Long = Sy
 /** Canciones que esperan elegir a qué playlist van. */
 data class PendingAdd(val slug: String, val tracks: List<TrackItem>)
 
+data class ShareTarget(
+    val title: String,
+    val subtitle: String,
+    val cover: String?,
+    val url: String,
+    val round: Boolean = false,
+    val slug: String = "",
+    val track: TrackItem? = null,
+)
+
 /**
  * El estado de la app: cuentas, reproducción y avisos. Los avisos del motor llegan desde hilos
  * de Rust y se pasan al hilo principal; todo lo que bloquea al motor va en Dispatchers.IO.
@@ -74,6 +84,7 @@ object Store : EngineListener {
     var sessionBusy by mutableStateOf(false)
     var audio by mutableStateOf<AudioSettings?>(null)
     var adding by mutableStateOf<PendingAdd?>(null)
+    var sharing by mutableStateOf<ShareTarget?>(null)
     var libraryRevision by mutableIntStateOf(0)
 
     val signedIn: List<ProviderInfo> get() = providers.filter { it.signedIn }
@@ -302,6 +313,63 @@ object Store : EngineListener {
         run { it.removeFromPlaylist(slug, playlist, track) }
             .onFailure { problem = describe(it) }
             .isSuccess
+
+    fun createPlaylistAndAdd(name: String, pending: PendingAdd) = launch {
+        val clean = name.trim()
+        if (clean.isEmpty()) return@launch
+        adding = null
+        run {
+            val id = it.createPlaylist(pending.slug, clean)
+            it.addToPlaylist(pending.slug, id, pending.tracks.map { track -> track.id })
+        }
+            .onSuccess {
+                problem = "Creada «$clean» y agregada."
+                libraryRevision++
+            }
+            .onFailure { problem = describe(it) }
+    }
+
+    suspend fun setPlaylistPublic(id: String, public: Boolean, slug: String): Boolean =
+        run { it.setPlaylistPublic(slug, id, public) }
+            .onSuccess { libraryRevision++ }
+            .onFailure { problem = describe(it) }
+            .isSuccess
+
+    suspend fun setPlaylistCover(id: String, image: ByteArray?, slug: String): Boolean =
+        run { it.setPlaylistCover(slug, id, image) }
+            .onSuccess { libraryRevision++ }
+            .onFailure { problem = describe(it) }
+            .isSuccess
+
+    fun canSetPlaylistCover(slug: String): Boolean =
+        runCatching { engine.canSetPlaylistCover(slug) }.getOrDefault(false)
+
+    // ── Compartir ──────────────────────────────────────────────────────────────────────────
+
+    fun share(
+        slug: String,
+        kind: SavedKind,
+        id: String,
+        title: String,
+        subtitle: String,
+        cover: String?,
+        track: TrackItem? = null,
+    ) = launch {
+        val url = run { it.shareUrl(slug, kind, id) }.getOrNull()
+        if (url.isNullOrBlank()) {
+            problem = "Este elemento no tiene un enlace para compartir."
+        } else {
+            sharing = ShareTarget(
+                title = title,
+                subtitle = subtitle,
+                cover = cover,
+                url = url,
+                round = kind == SavedKind.ARTIST,
+                slug = slug,
+                track = track,
+            )
+        }
+    }
 
     // ── Sesiones ───────────────────────────────────────────────────────────────────────────
 

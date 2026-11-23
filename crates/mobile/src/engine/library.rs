@@ -42,6 +42,8 @@ pub struct PlaylistItem {
     /// 0 cuando el servicio no lo dice.
     pub track_count: u32,
     pub owned: bool,
+    #[serde(default)]
+    pub is_public: bool,
 }
 
 /// Una tarjeta de un estante del inicio, o un resultado de búsqueda.
@@ -77,7 +79,11 @@ pub struct HomeSnapshot {
 
 fn snapshot_path(slug: &str) -> Option<std::path::PathBuf> {
     let name: String = slug.chars().filter(char::is_ascii_alphanumeric).collect();
-    Some(dirs::cache_dir()?.join("sonora").join(format!("home-{name}.json")))
+    Some(
+        dirs::cache_dir()?
+            .join("sonora")
+            .join(format!("home-{name}.json")),
+    )
 }
 
 /// Una fila del inicio.
@@ -249,7 +255,38 @@ impl Engine {
 
     pub fn album(&self, slug: String, id: String) -> Result<AlbumPage, MobileError> {
         let api = self.inner.api(&slug)?;
-        let detail = block(async { api.album(&id).await })?;
+        let mut detail = block(async { api.album(&id).await })?;
+        let cover_bad = detail
+            .album
+            .cover_large
+            .as_deref()
+            .or(detail.album.cover.as_deref())
+            .is_none_or(music::artwork::is_video_or_artist_image);
+        if cover_bad
+            && let Some(query) = music::artwork::ArtworkQuery::for_album(&detail.album)
+            && let Ok(Some(url)) = runtime()
+                .block_on(async { music::artwork::ArtworkSearch::new().find(&query).await })
+        {
+            detail.album.cover = Some(url.clone());
+            detail.album.cover_large = Some(url);
+        }
+        let album_cover = detail
+            .album
+            .cover
+            .clone()
+            .or_else(|| detail.album.cover_large.clone())
+            .filter(|url| !music::artwork::is_video_or_artist_image(url));
+        if let Some(cover) = album_cover {
+            for track in &mut detail.tracks {
+                let bad = track
+                    .cover
+                    .as_deref()
+                    .is_none_or(music::artwork::is_video_or_artist_image);
+                if bad {
+                    track.cover = Some(cover.clone());
+                }
+            }
+        }
         Ok(AlbumPage {
             label: detail.album.label.clone(),
             release_date: detail.album.release_date.clone(),
@@ -397,6 +434,48 @@ impl Engine {
         block(async { api.remove_track_from_playlist(&playlist, &track).await })
     }
 
+    /// Cambia si una playlist propia es pública o privada.
+    pub fn set_playlist_public(
+        &self,
+        slug: String,
+        id: String,
+        is_public: bool,
+    ) -> Result<(), MobileError> {
+        let api = self.inner.api(&slug)?;
+        block(async { api.set_playlist_public(&id, is_public).await })
+    }
+
+    /// Cambia o quita la portada de una playlist propia. `None` restaura la portada por defecto.
+    pub fn set_playlist_cover(
+        &self,
+        slug: String,
+        id: String,
+        image: Option<Vec<u8>>,
+    ) -> Result<(), MobileError> {
+        let api = self.inner.api(&slug)?;
+        block(async { api.set_playlist_cover(&id, image.as_deref()).await })
+    }
+
+    /// Si el servicio permite subir una portada personalizada para una playlist.
+    pub fn can_set_playlist_cover(&self, slug: String) -> bool {
+        lock(&self.inner.sessions)
+            .get(&slug)
+            .is_some_and(|session| session.capabilities.playlist_covers)
+    }
+
+    /// El enlace público para compartir una canción, álbum, artista o playlist, si el servicio
+    /// tiene uno.
+    pub fn share_url(&self, slug: String, kind: SavedKind, id: String) -> Option<String> {
+        let api = self.inner.api(&slug).ok()?;
+        let media = match kind {
+            SavedKind::Track => music::MediaKind::Track,
+            SavedKind::Album => music::MediaKind::Album,
+            SavedKind::Artist => music::MediaKind::Artist,
+            SavedKind::Playlist => music::MediaKind::Playlist,
+        };
+        api.share_url(media, &id)
+    }
+
     /// Si una canción está entre las guardadas de la cuenta, para el corazón del reproductor.
     /// La primera vez carga la lista en segundo plano y responde `false`; al terminar avisa con
     /// un estado nuevo (`on_state`) para que la app vuelva a preguntar.
@@ -528,5 +607,6 @@ fn playlist(playlist: &Playlist) -> PlaylistItem {
         cover: playlist.cover.clone(),
         track_count: playlist.track_count,
         owned: playlist.owned,
+        is_public: playlist.public,
     }
 }

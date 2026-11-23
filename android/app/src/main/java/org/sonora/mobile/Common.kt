@@ -2,6 +2,10 @@
 
 package org.sonora.mobile
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -36,6 +40,10 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Warning
@@ -45,12 +53,16 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -373,6 +385,23 @@ fun TrackMenu(track: TrackItem, slug: String, open: Boolean, onDismiss: () -> Un
         DownloadMenuItem(track, slug, onDismiss)
         DiscordMenuItem(track, slug, onDismiss)
         DropdownMenuItem(
+            text = { Text("Compartir…") },
+            leadingIcon = { Icon(Icons.Filled.Share, null) },
+            onClick = {
+                pick {
+                    Store.share(
+                        slug = slug,
+                        kind = SavedKind.TRACK,
+                        id = track.id,
+                        title = track.title,
+                        subtitle = track.artists,
+                        cover = track.cover,
+                        track = track,
+                    )
+                }
+            },
+        )
+        DropdownMenuItem(
             text = { Text("Agregar a una playlist…") },
             leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
             onClick = { pick { Store.adding = PendingAdd(slug, listOf(track)) } },
@@ -549,4 +578,97 @@ fun SectionTitle(text: String) {
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
     )
+}
+
+/** Hoja de compartir para canciones, álbumes, playlists y artistas en Android. */
+@Composable
+fun ShareSheet(target: ShareTarget, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val shareText = if (target.subtitle.isNotBlank()) {
+        "${target.title} — ${target.subtitle}\n${target.url}"
+    } else {
+        "${target.title}\n${target.url}"
+    }
+
+    fun copy(label: String, text: String, toast: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        Store.problem = toast
+        onDismiss()
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Cover(target.cover, 56.dp, round = target.round)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        target.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (target.subtitle.isNotBlank()) {
+                        Text(
+                            target.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        target.url,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            ListItem(
+                headlineContent = { Text("Compartir…") },
+                leadingContent = { Icon(Icons.Filled.Share, null) },
+                modifier = Modifier.clickable {
+                    onDismiss()
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, target.title)
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Compartir"))
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Copiar enlace") },
+                leadingContent = { Icon(Icons.Filled.Link, null) },
+                modifier = Modifier.clickable {
+                    copy("Enlace", target.url, "Enlace copiado.")
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Copiar título y enlace") },
+                leadingContent = { Icon(Icons.Filled.ContentCopy, null) },
+                modifier = Modifier.clickable {
+                    copy("Compartir", shareText, "Copiado al portapapeles.")
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Abrir en el navegador") },
+                leadingContent = { Icon(Icons.Filled.OpenInBrowser, null) },
+                modifier = Modifier.clickable {
+                    onDismiss()
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.url)))
+                    }
+                },
+            )
+        }
+    }
 }

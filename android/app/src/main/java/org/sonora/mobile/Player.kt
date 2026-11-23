@@ -85,6 +85,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -968,6 +969,23 @@ private fun TrackActions(track: TrackItem, slug: String, onClose: () -> Unit, on
             )
             DownloadMenuItem(track, slug) { open = false }
             DiscordMenuItem(track, slug) { open = false }
+            DropdownMenuItem(
+                text = { Text("Compartir…") },
+                leadingIcon = { Icon(Icons.Filled.Share, null) },
+                onClick = {
+                    pick {
+                        Store.share(
+                            slug = slug,
+                            kind = SavedKind.TRACK,
+                            id = track.id,
+                            title = track.title,
+                            subtitle = track.artists,
+                            cover = track.cover,
+                            track = track,
+                        )
+                    }
+                },
+            )
             if (!(Store.state?.remote ?: false)) {
                 track.albumId?.let { album ->
                     DropdownMenuItem(

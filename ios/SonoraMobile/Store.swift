@@ -54,6 +54,8 @@ final class Store: ObservableObject {
     @Published var audio: AudioSettings
     /// Canciones que esperan elegir a qué playlist van.
     @Published var addingToPlaylist: PendingAdd?
+    /// Elemento abierto en la hoja de compartir.
+    @Published var sharing: ShareTarget?
     /// Sube cada vez que cambian las playlists, para recargar la biblioteca.
     @Published var libraryRevision = 0
     /// El proveedor en el que se busca.
@@ -580,6 +582,80 @@ final class Store: ObservableObject {
         }
     }
 
+    func createPlaylistAndAdd(_ name: String, adding: PendingAdd) {
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty else { return }
+        addingToPlaylist = nil
+        let ids = adding.tracks.map(\.id)
+        let slug = adding.slug
+        Task {
+            switch await run({ engine in
+                let id = try engine.createPlaylist(slug: slug, name: clean)
+                try engine.addToPlaylist(slug: slug, playlist: id, tracks: ids)
+            }) {
+            case .success:
+                problem = "Creada «\(clean)» y agregada."
+                libraryRevision += 1
+            case .failure(let error):
+                problem = describe(error)
+            }
+        }
+    }
+
+    func setPlaylistPublic(_ id: String, public isPublic: Bool, in slug: String) async -> Bool {
+        switch await run({ try $0.setPlaylistPublic(slug: slug, id: id, isPublic: isPublic) }) {
+        case .success:
+            libraryRevision += 1
+            return true
+        case .failure(let error):
+            problem = describe(error)
+            return false
+        }
+    }
+
+    func setPlaylistCover(_ id: String, image: Data?, in slug: String) async -> Bool {
+        switch await run({ try $0.setPlaylistCover(slug: slug, id: id, image: image) }) {
+        case .success:
+            libraryRevision += 1
+            return true
+        case .failure(let error):
+            problem = describe(error)
+            return false
+        }
+    }
+
+    func canSetPlaylistCover(in slug: String) -> Bool {
+        engine.canSetPlaylistCover(slug: slug)
+    }
+
+    // MARK: Compartir
+
+    func share(
+        _ kind: SavedKind,
+        id: String,
+        from slug: String,
+        title: String,
+        subtitle: String,
+        cover: String?
+    ) {
+        Task {
+            let url = await Task.detached(priority: .userInitiated) { [engine] in
+                engine.shareUrl(slug: slug, kind: kind, id: id)
+            }.value
+            guard let url, !url.isEmpty else {
+                problem = "Este elemento no tiene un enlace para compartir."
+                return
+            }
+            sharing = ShareTarget(
+                title: title,
+                subtitle: subtitle,
+                cover: cover,
+                url: url,
+                round: kind == .artist
+            )
+        }
+    }
+
     // MARK: Scrobbling
 
     /// Vincula un servicio de scrobbling; Last.fm y Libre.fm abren la aprobación en Safari.
@@ -649,6 +725,16 @@ struct PendingAdd: Identifiable {
     let id = UUID()
     let slug: String
     let tracks: [TrackItem]
+}
+
+/// Elemento que se muestra en la hoja de compartir.
+struct ShareTarget: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let cover: String?
+    let url: String
+    let round: Bool
 }
 
 /// El mensaje de un error del motor, sin el nombre del tipo delante.

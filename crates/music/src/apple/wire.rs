@@ -714,6 +714,35 @@ pub fn artwork(attributes: &Attributes, size: u32) -> Option<String> {
     Some(sized(template, size, size))
 }
 
+/// A cover at another size, worked out from its url alone.
+pub fn cover_at(url: &str, size: crate::CoverSize) -> Option<String> {
+    if !url.contains("mzstatic.com") {
+        return None;
+    }
+    let dim = match size {
+        crate::CoverSize::Large => 1200,
+        crate::CoverSize::Full => 2048,
+    };
+    if url.contains("{w}") || url.contains("{h}") {
+        return Some(sized(url, dim, dim));
+    }
+    if let Some(idx) = url.rfind('/') {
+        let (base, file) = url.split_at(idx + 1);
+        if let Some(x_pos) = file.find('x') {
+            let width_str = &file[..x_pos];
+            if width_str.chars().all(|c| c.is_ascii_digit()) && !width_str.is_empty() {
+                let rest = &file[x_pos + 1..];
+                let non_digit = rest
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(rest.len());
+                let ext = &rest[non_digit..];
+                return Some(format!("{base}{dim}x{dim}{ext}"));
+            }
+        }
+    }
+    None
+}
+
 /// The first editorial picture of an artist that Apple sent, at no more than `BANNER` across
 /// and its own aspect.
 pub fn banner(attributes: &Attributes) -> Option<String> {

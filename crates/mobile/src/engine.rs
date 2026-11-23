@@ -805,6 +805,7 @@ struct Session {
     api: Arc<dyn MusicApi>,
     playback: Arc<dyn PlaybackFactory>,
     account: Account,
+    capabilities: music::Capabilities,
 }
 
 /// El reproductor en marcha y la tarea que escucha sus eventos.
@@ -944,6 +945,7 @@ impl Inner {
                 api: session.api,
                 playback: session.playback,
                 account: account.clone(),
+                capabilities: session.capabilities,
             },
         );
         let mut active = lock(&self.active);

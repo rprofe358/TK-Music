@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Audio
 
@@ -237,14 +238,22 @@ struct PlaylistPicker: View {
     @EnvironmentObject private var store: Store
     @Environment(\.dismiss) private var dismiss
     let adding: PendingAdd
+    @State private var creating = false
+    @State private var newName = ""
 
     var body: some View {
         NavigationStack {
             Loader(key: "picker-\(adding.slug)-\(store.libraryRevision)", load: { try $0.libraryPlaylists(slug: adding.slug) }) { playlists in
                 let own = playlists.filter(\.owned)
                 List {
+                    Button {
+                        newName = ""
+                        creating = true
+                    } label: {
+                        Label("Nueva playlist…", systemImage: "plus.circle.fill")
+                    }
                     if own.isEmpty {
-                        Text("No tienes playlists propias en este servicio. Crea una en Biblioteca → +.")
+                        Text("No tienes playlists propias en este servicio todavía.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(own, id: \.id) { playlist in
@@ -268,6 +277,97 @@ struct PlaylistPicker: View {
                     Button("Cancelar") { dismiss() }
                 }
             }
+            .alert("Nueva playlist", isPresented: $creating) {
+                TextField("Nombre", text: $newName)
+                Button("Crear y agregar") {
+                    store.createPlaylistAndAdd(newName, adding: adding)
+                    dismiss()
+                }
+                Button("Cancelar", role: .cancel) {}
+            }
         }
+    }
+}
+
+// MARK: - Hoja de compartir
+
+struct ShareSheet: View {
+    @EnvironmentObject private var store: Store
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    let target: ShareTarget
+
+    private var shareText: String {
+        target.subtitle.isEmpty
+            ? "\(target.title)\n\(target.url)"
+            : "\(target.title) — \(target.subtitle)\n\(target.url)"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                HStack(spacing: 14) {
+                    Cover(url: target.cover, size: 56, round: target.round)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(target.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                        if !target.subtitle.isEmpty {
+                            Text(target.subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Text(target.url)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.vertical, 4)
+
+                Section {
+                    if let url = URL(string: target.url) {
+                        ShareLink(
+                            item: url,
+                            subject: Text(target.title),
+                            message: Text(shareText)
+                        ) {
+                            Label("Compartir…", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    Button {
+                        UIPasteboard.general.string = target.url
+                        store.problem = "Enlace copiado."
+                        dismiss()
+                    } label: {
+                        Label("Copiar enlace", systemImage: "link")
+                    }
+                    Button {
+                        UIPasteboard.general.string = shareText
+                        store.problem = "Copiado al portapapeles."
+                        dismiss()
+                    } label: {
+                        Label("Copiar título y enlace", systemImage: "doc.on.doc")
+                    }
+                    if let url = URL(string: target.url) {
+                        Button {
+                            dismiss()
+                            openURL(url)
+                        } label: {
+                            Label("Abrir en el navegador", systemImage: "safari")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Compartir")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

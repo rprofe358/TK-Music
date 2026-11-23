@@ -81,6 +81,9 @@ struct PlayerView: View {
         .sheet(item: $playlist) { adding in
             PlaylistPicker(adding: adding).environmentObject(store)
         }
+        .sheet(item: $store.sharing) { target in
+            ShareSheet(target: target).environmentObject(store)
+        }
         .alert(
             "Aviso",
             isPresented: Binding(
@@ -365,6 +368,18 @@ struct PlayerView: View {
                 }
                 DownloadButton(track: track, slug: slug)
                 DiscordButton(track: track, slug: slug)
+                Button {
+                    store.share(
+                        .track,
+                        id: track.id,
+                        from: slug,
+                        title: track.title,
+                        subtitle: track.artists,
+                        cover: track.cover
+                    )
+                } label: {
+                    Label("Compartir…", systemImage: "square.and.arrow.up")
+                }
                 if !state.remote, let album = track.albumId {
                     Button {
                         dismiss()

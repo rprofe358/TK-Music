@@ -6,8 +6,8 @@ use music::{CoverSize, MusicApi};
 
 use crate::{Io, Playback, Session, SessionEvent, join};
 
-/// The artwork of one album: the large cover, and the full-resolution one when the provider
-/// serves something bigger.
+/// The artwork of one album or recovered track: the large cover, and the full-resolution one
+/// when the provider serves something bigger.
 #[derive(Clone)]
 struct Art {
     large: String,
@@ -18,6 +18,7 @@ pub struct Cover {
     session: Entity<Session>,
     playback: Entity<Playback>,
     album: Option<String>,
+    track_key: Option<String>,
     large: Option<String>,
     full: Option<String>,
     cache: HashMap<String, Art>,
@@ -47,6 +48,7 @@ impl Cover {
             session,
             playback,
             album: None,
+            track_key: None,
             large: None,
             full: None,
             cache: HashMap::new(),
@@ -77,6 +79,7 @@ impl Cover {
     fn forget(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.album = None;
+        self.track_key = None;
         self.large = None;
         self.full = None;
         self.cache.clear();
@@ -84,20 +87,36 @@ impl Cover {
     }
 
     /// Follows the shown track's album. Both covers come straight from the track's thumbnail
-    /// when the provider can tell, and the album is loaded only when it cannot.
+    /// when it is a genuine album cover the provider can scale; otherwise the album is loaded
+    /// from the provider or recovered from public catalogues.
     fn follow(&mut self, cx: &mut Context<Self>) {
-        let (album, thumbnail) = match self.playback.read(cx).shown_track(cx) {
-            Some(track) => (track.album_id, track.cover),
-            None => (None, None),
+        let shown = self.playback.read(cx).shown_track(cx);
+        let (album, track_key, thumbnail) = match &shown {
+            Some(track) => (
+                track.album_id.clone(),
+                Some(cache_key(track)),
+                track.cover.clone(),
+            ),
+            None => (None, None, None),
         };
-        if album == self.album {
+        if album == self.album && track_key == self.track_key {
             return;
         }
         self.task = None;
         self.album = album.clone();
-        let cached = album.as_ref().and_then(|id| self.cache.get(id)).cloned();
-        let client = album.as_deref().and_then(|id| self.client(id, cx));
-        let derive = |size| client.as_ref()?.cover_at(thumbnail.as_deref()?, size);
+        self.track_key = track_key.clone();
+
+        let key = album.as_ref().or(track_key.as_ref());
+        let cached = key.and_then(|id| self.cache.get(id)).cloned();
+        let usable_thumb = thumbnail
+            .as_deref()
+            .filter(|url| !music::artwork::is_video_or_artist_image(url));
+        let client = album
+            .as_deref()
+            .and_then(|id| self.client(id, cx))
+            .or_else(|| self.session.read(cx).client());
+        let derive = |size| client.as_ref()?.cover_at(usable_thumb?, size);
+
         self.large = cached
             .as_ref()
             .map(|art| art.large.clone())
@@ -107,17 +126,55 @@ impl Cover {
             .or_else(|| derive(CoverSize::Full));
         cx.notify();
 
-        let Some(id) = album else {
-            return;
-        };
         if self.large.is_some() {
             return;
         }
-        self.load(id, cx);
+
+        if let Some(id) = album {
+            self.load(id, shown, cx);
+        } else if let Some(track) = shown {
+            self.recover(track, cx);
+        }
     }
 
-    fn load(&mut self, id: String, cx: &mut Context<Self>) {
+    /// Recovers a missing or video-frame cover by searching public catalogues (Apple Music and
+    /// Deezer) for the official album artwork.
+    fn recover(&mut self, track: music::Track, cx: &mut Context<Self>) {
+        let Some(query) = music::artwork::ArtworkQuery::for_track(&track) else {
+            return;
+        };
+        let key = track.album_id.clone().unwrap_or_else(|| cache_key(&track));
+        let expected_track = Some(cache_key(&track));
+        let io = self.io.clone();
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let search = music::artwork::ArtworkSearch::new();
+            let found = join(io.spawn(async move { search.find(&query).await })).await;
+            this.update(cx, |this, cx| {
+                this.task = None;
+                if let Ok(Some(url)) = found {
+                    this.cache.insert(
+                        key,
+                        Art {
+                            large: url.clone(),
+                            full: Some(url.clone()),
+                        },
+                    );
+                    if this.track_key == expected_track {
+                        this.large = Some(url.clone());
+                        this.full = Some(url);
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        }));
+    }
+
+    fn load(&mut self, id: String, fallback: Option<music::Track>, cx: &mut Context<Self>) {
         let Some(client) = self.client(&id, cx) else {
+            if let Some(track) = fallback {
+                self.recover(track, cx);
+            }
             return;
         };
 
@@ -125,7 +182,11 @@ impl Cover {
         let wanted = id.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
             let found = join(io.spawn(async move {
-                let large = client.album(&wanted).await?.album.cover_large;
+                let album = client.album(&wanted).await?.album;
+                let large = album
+                    .cover_large
+                    .or(album.cover)
+                    .filter(|url| !music::artwork::is_video_or_artist_image(url));
                 let full = large
                     .as_deref()
                     .and_then(|cover| client.cover_at(cover, CoverSize::Full));
@@ -136,10 +197,7 @@ impl Cover {
             this.update(cx, |this, cx| {
                 this.task = None;
                 match found {
-                    Ok(art) => {
-                        let Some(art) = art else {
-                            return;
-                        };
+                    Ok(Some(art)) => {
                         this.cache.insert(id.clone(), art.clone());
                         if this.album.as_deref() == Some(id.as_str()) {
                             this.large = Some(art.large);
@@ -148,9 +206,21 @@ impl Cover {
                             cx.notify();
                         }
                     }
+                    Ok(None) => {
+                        if this.album.as_deref() == Some(id.as_str())
+                            && let Some(track) = fallback
+                        {
+                            this.recover(track, cx);
+                        }
+                    }
                     Err(error) => {
                         log::warn!("cover: cannot load {id}: {error:#}");
                         crate::noted(&error, cx);
+                        if this.album.as_deref() == Some(id.as_str())
+                            && let Some(track) = fallback
+                        {
+                            this.recover(track, cx);
+                        }
                     }
                 }
             })
@@ -167,4 +237,11 @@ impl Cover {
             false => session.client(),
         }
     }
+}
+
+fn cache_key(track: &music::Track) -> String {
+    track
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("{}::{}", track.artists, track.name))
 }

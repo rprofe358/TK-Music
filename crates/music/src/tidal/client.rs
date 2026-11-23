@@ -25,10 +25,10 @@ use crate::tidal::auth::{self, Credentials, Lane};
 use crate::tidal::manifest::Manifest;
 use crate::tidal::{lock, wire};
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Encoding, Genre,
-    GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Offer, Page, Pages,
-    Playlist, PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, SignInFailure, SignInProblem,
-    Track, UserProfile, distinct_covers, escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, CoverSize,
+    Encoding, Genre, GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Offer,
+    Page, Pages, Playlist, PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, SignInFailure,
+    SignInProblem, Track, UserProfile, distinct_covers, escape,
 };
 
 const V1: &str = "https://api.tidal.com/v1";
@@ -1058,6 +1058,10 @@ impl TidalClient {
 
 #[async_trait]
 impl MusicApi for TidalClient {
+    fn cover_at(&self, cover: &str, size: CoverSize) -> Option<String> {
+        wire::cover_at(cover, size)
+    }
+
     /// False once Tidal has refused the session, so the app sends the listener back to sign in
     /// rather than reporting every track as unplayable.
     fn alive(&self) -> bool {

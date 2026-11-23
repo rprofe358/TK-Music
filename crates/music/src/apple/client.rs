@@ -27,9 +27,9 @@ use crate::apple::recommend;
 use crate::apple::wire::{self, Resource};
 use crate::engine::Loudness;
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Genre, GenreDetail,
-    GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, PinOutcome, PinTarget,
-    PinTargetKind, Playlist, PlaylistDetail, SavedArtist, Track, UserProfile, escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, CoverSize, Genre,
+    GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, PinOutcome,
+    PinTarget, PinTargetKind, Playlist, PlaylistDetail, SavedArtist, Track, UserProfile, escape,
 };
 
 /// The API the web player calls.
@@ -1114,6 +1114,10 @@ impl AppleClient {
 
 #[async_trait]
 impl MusicApi for AppleClient {
+    fn cover_at(&self, cover: &str, size: CoverSize) -> Option<String> {
+        wire::cover_at(cover, size)
+    }
+
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         let part = match kind {
             MediaKind::Track => "song",

@@ -18,8 +18,8 @@ use crate::cover::{self, CoverLimits};
 use crate::deezer::{decrypt, wire};
 use crate::engine::Loudness;
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, ArtistRef, Encoding, Genre,
-    GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Offer, Playlist,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, ArtistRef, CoverSize, Encoding,
+    Genre, GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Offer, Playlist,
     PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, Track, UserProfile, distinct_covers, escape,
 };
 
@@ -830,6 +830,10 @@ impl DeezerClient {
 
 #[async_trait]
 impl MusicApi for DeezerClient {
+    fn cover_at(&self, cover: &str, size: CoverSize) -> Option<String> {
+        wire::cover_at(cover, size)
+    }
+
     /// No link for a smart tracklist or a Flow, since Deezer makes each for one listener.
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         if id.starts_with(wire::SMART) || id.starts_with(wire::FLOW) {

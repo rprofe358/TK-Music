@@ -2,6 +2,7 @@
 
 package org.sonora.mobile
 
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,7 +48,13 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.HideImage
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -747,14 +754,24 @@ private fun Empty() {
 @Composable
 fun AlbumScreen(slug: String, id: String) {
     val nav = LocalNav.current
-    Column(Modifier.fillMaxSize()) {
-        Bar("Álbum", back = true) {
-            IconButton(onClick = { Store.save(SavedKind.ALBUM, id, slug) }) { Icon(Icons.Filled.FavoriteBorder, "Guardar") }
-        }
-        Loader(key = id, load = { it.album(slug, id) }) { page ->
+    Loader(key = id, load = { it.album(slug, id) }) { page ->
+        Column(Modifier.fillMaxSize()) {
+            Bar("Álbum", back = true) {
+                IconButton(onClick = {
+                    Store.share(
+                        slug = slug,
+                        kind = SavedKind.ALBUM,
+                        id = page.album.id,
+                        title = page.album.title,
+                        subtitle = page.album.artists,
+                        cover = page.album.coverLarge ?: page.album.cover,
+                    )
+                }) { Icon(Icons.Filled.Share, "Compartir") }
+                IconButton(onClick = { Store.save(SavedKind.ALBUM, id, slug) }) { Icon(Icons.Filled.FavoriteBorder, "Guardar") }
+            }
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
-                    Header(page.album.coverLarge, page.album.title) {
+                    Header(page.album.coverLarge ?: page.album.cover, page.album.title) {
                         val artist = page.album.artistId
                         TextButton(onClick = { artist?.let { nav.navigate(Routes.artist(slug, it)) } }, enabled = artist != null) {
                             Text(page.album.artists)
@@ -763,7 +780,7 @@ fun AlbumScreen(slug: String, id: String) {
                     }
                 }
                 item { PlayButtons(page.tracks, slug) }
-                trackItems(page.tracks, slug, numbered = true, covers = false)
+                trackItems(page.tracks, slug, numbered = true, covers = true)
                 val footer = listOf(page.releaseDate, page.label).filter { it.isNotEmpty() }.joinToString(" · ")
                 if (footer.isNotEmpty()) {
                     item { Text(footer, Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall) }
@@ -795,28 +812,95 @@ fun PlaylistScreen(slug: String, id: String) {
 @Composable
 private fun PlaylistBody(page: PlaylistPage, slug: String) {
     val nav = LocalNav.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tracks by remember { mutableStateOf(page.tracks) }
     var continuation by remember { mutableStateOf(page.continuation) }
     var loading by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf(page.playlist.title) }
+    var isPublic by remember { mutableStateOf(page.playlist.isPublic) }
+    var cover by remember { mutableStateOf(page.playlist.cover) }
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    val canCover = remember(slug) { Store.canSetPlaylistCover(slug) }
 
-    fun remove(index: Int) {
-        val track = tracks.getOrNull(index) ?: return
-        tracks = tracks.toMutableList().also { it.removeAt(index) }
+    val pickCover = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            if (!Store.removeFromPlaylist(page.playlist.id, track.id, slug)) {
-                tracks = tracks.toMutableList().also { it.add(index.coerceAtMost(it.size), track) }
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            if (bytes == null) {
+                Store.problem = "No se pudo leer la imagen."
+                return@launch
+            }
+            if (Store.setPlaylistCover(page.playlist.id, bytes, slug)) {
+                cover = uri.toString()
+                Store.problem = "Portada actualizada."
             }
         }
     }
 
+    val visible = remember(tracks, filter) {
+        val q = filter.trim()
+        if (q.isEmpty()) tracks
+        else tracks.filter {
+            it.title.contains(q, ignoreCase = true) ||
+                it.artists.contains(q, ignoreCase = true) ||
+                it.album.contains(q, ignoreCase = true)
+        }
+    }
+
+    val summary = remember(page.playlist.owner, tracks, isPublic, page.playlist.owned) {
+        val parts = mutableListOf<String>()
+        if (page.playlist.owner.isNotBlank()) parts += page.playlist.owner
+        val count = maxOf(tracks.size, page.playlist.trackCount.toInt())
+        if (count > 0) parts += if (count == 1) "1 canción" else "$count canciones"
+        val totalMs = tracks.sumOf { it.durationMs.toLong() }
+        if (totalMs > 0) {
+            val mins = totalMs / 60_000
+            parts += if (mins >= 60) "${mins / 60} h ${mins % 60} min" else "$mins min"
+        }
+        if (page.playlist.owned) parts += if (isPublic) "Pública" else "Privada"
+        parts.joinToString(" · ")
+    }
+
+    fun remove(index: Int) {
+        val track = visible.getOrNull(index) ?: return
+        val realIndex = tracks.indexOfFirst { it.id == track.id }
+        if (realIndex < 0) return
+        tracks = tracks.toMutableList().also { it.removeAt(realIndex) }
+        scope.launch {
+            if (!Store.removeFromPlaylist(page.playlist.id, track.id, slug)) {
+                tracks = tracks.toMutableList().also { it.add(realIndex.coerceAtMost(it.size), track) }
+            }
+        }
+    }
+
+    fun sharePlaylist() {
+        Store.share(
+            slug = slug,
+            kind = SavedKind.PLAYLIST,
+            id = page.playlist.id,
+            title = title,
+            subtitle = page.playlist.owner,
+            cover = cover,
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         Bar("Playlist", back = true) {
+            if (tracks.isNotEmpty()) {
+                IconButton(onClick = {
+                    searching = !searching
+                    if (!searching) filter = ""
+                }) { Icon(if (searching) Icons.Filled.Close else Icons.Filled.Search, "Buscar en la playlist") }
+            }
+            IconButton(onClick = ::sharePlaylist) { Icon(Icons.Filled.Share, "Compartir") }
             if (page.playlist.owned) {
                 Box {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Opciones") }
@@ -826,6 +910,42 @@ private fun PlaylistBody(page: PlaylistPage, slug: String) {
                             name = title
                             renaming = true
                         })
+                        DropdownMenuItem(
+                            text = { Text(if (isPublic) "Hacer privada" else "Hacer pública") },
+                            leadingIcon = { Icon(if (isPublic) Icons.Filled.Lock else Icons.Filled.Public, null) },
+                            onClick = {
+                                menu = false
+                                val next = !isPublic
+                                scope.launch {
+                                    if (Store.setPlaylistPublic(page.playlist.id, next, slug)) {
+                                        isPublic = next
+                                    }
+                                }
+                            },
+                        )
+                        if (canCover) {
+                            DropdownMenuItem(
+                                text = { Text("Cambiar portada") },
+                                leadingIcon = { Icon(Icons.Filled.Image, null) },
+                                onClick = {
+                                    menu = false
+                                    pickCover.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Quitar portada") },
+                                leadingIcon = { Icon(Icons.Filled.HideImage, null) },
+                                onClick = {
+                                    menu = false
+                                    scope.launch {
+                                        if (Store.setPlaylistCover(page.playlist.id, null, slug)) {
+                                            cover = null
+                                            Store.problem = "Portada quitada."
+                                        }
+                                    }
+                                },
+                            )
+                        }
                         DropdownMenuItem(text = { Text("Eliminar playlist") }, leadingIcon = { Icon(Icons.Filled.Delete, null) }, onClick = {
                             menu = false
                             deleting = true
@@ -838,14 +958,31 @@ private fun PlaylistBody(page: PlaylistPage, slug: String) {
                 }
             }
         }
+        if (searching) {
+            OutlinedTextField(
+                value = filter,
+                onValueChange = { filter = it },
+                placeholder = { Text("Filtrar canciones…") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, null) },
+                trailingIcon = {
+                    if (filter.isNotEmpty()) {
+                        IconButton(onClick = { filter = "" }) { Icon(Icons.Filled.Clear, "Limpiar") }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             item {
-                Header(page.playlist.cover, title) {
-                    Text(page.playlist.owner, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Header(cover, title) {
+                    if (summary.isNotEmpty()) {
+                        Text(summary, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                    }
                 }
             }
-            item { PlayButtons(tracks, slug) }
-            trackItems(tracks, slug, onRemove = if (page.playlist.owned) ::remove else null)
+            item { PlayButtons(visible, slug) }
+            trackItems(visible, slug, onRemove = if (page.playlist.owned) ::remove else null)
             continuation?.let { next ->
                 item {
                     TextButton(
@@ -906,9 +1043,20 @@ private fun PlaylistBody(page: PlaylistPage, slug: String) {
 fun ArtistScreen(slug: String, id: String) {
     val scope = rememberCoroutineScope()
     var biography by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
-        Bar("Artista", back = true)
-        Loader(key = id, load = { it.artist(slug, id) }) { page ->
+    Loader(key = id, load = { it.artist(slug, id) }) { page ->
+        Column(Modifier.fillMaxSize()) {
+            Bar("Artista", back = true) {
+                IconButton(onClick = {
+                    Store.share(
+                        slug = slug,
+                        kind = SavedKind.ARTIST,
+                        id = page.id,
+                        title = page.name,
+                        subtitle = "",
+                        cover = page.cover,
+                    )
+                }) { Icon(Icons.Filled.Share, "Compartir") }
+            }
             LazyColumn(Modifier.fillMaxSize()) {
                 item {
                     Header(page.cover, page.name, round = true) {
@@ -978,6 +1126,35 @@ private fun androidx.compose.foundation.lazy.LazyListScope.albumShelf(title: Str
 
 @Composable
 fun PlaylistPicker(pending: PendingAdd) {
+    var creating by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+
+    if (creating) {
+        AlertDialog(
+            onDismissRequest = { creating = false },
+            title = { Text("Nueva playlist") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Nombre") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        creating = false
+                        Store.createPlaylistAndAdd(newName, pending)
+                    },
+                    enabled = newName.isNotBlank(),
+                ) { Text("Crear y agregar") }
+            },
+            dismissButton = { TextButton(onClick = { creating = false }) { Text("Cancelar") } },
+        )
+        return
+    }
+
     AlertDialog(
         onDismissRequest = { Store.adding = null },
         title = { Text("Agregar a una playlist") },
@@ -986,7 +1163,7 @@ fun PlaylistPicker(pending: PendingAdd) {
                 Loader(key = "picker-${pending.slug}-${Store.libraryRevision}", load = { it.libraryPlaylists(pending.slug) }) { all ->
                     val own = all.filter { it.owned }
                     if (own.isEmpty()) {
-                        Text("No tienes playlists propias en este servicio. Crea una en Biblioteca con el botón +.")
+                        Text("No tienes playlists propias en este servicio. Crea una nueva aquí abajo.")
                     } else {
                         LazyColumn {
                             items(own) { playlist ->
@@ -996,6 +1173,9 @@ fun PlaylistPicker(pending: PendingAdd) {
                     }
                 }
             }
+        },
+        dismissButton = {
+            TextButton(onClick = { newName = ""; creating = true }) { Text("Nueva playlist") }
         },
         confirmButton = { TextButton(onClick = { Store.adding = null }) { Text("Cancelar") } },
     )

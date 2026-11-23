@@ -10,9 +10,9 @@ use ytmusic::YtMusic;
 use crate::cover::{self, CoverLimits};
 use crate::youtube::{genres, radio, subscriptions, wire};
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Feed, Genre,
-    GenreDetail, HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, SUGGESTIONS, SavedArtist,
-    Track, UserProfile, escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, CoverSize, Feed,
+    Genre, GenreDetail, HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, SUGGESTIONS,
+    SavedArtist, Track, UserProfile, escape,
 };
 
 const PORTRAIT_LIMIT: usize = 24;
@@ -66,6 +66,10 @@ impl YouTubeClient {
 
 #[async_trait]
 impl MusicApi for YouTubeClient {
+    fn cover_at(&self, cover: &str, size: CoverSize) -> Option<String> {
+        wire::cover_at(cover, size)
+    }
+
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String> {
         let id = escape::component(id);
         let url = match kind {
@@ -351,7 +355,17 @@ impl MusicApi for YouTubeClient {
     }
 
     async fn album(&self, album_id: &str) -> Result<AlbumDetail> {
-        let mut detail = self.api.album(album_id).await?;
+        let (detail, real_cover) =
+            tokio::join!(self.api.album(album_id), header_cover(&self.api, album_id),);
+        let mut detail = detail?;
+        if let Some(cover_thumbs) = real_cover {
+            let old_thumbs = std::mem::replace(&mut detail.album.thumbnails, cover_thumbs.clone());
+            for track in &mut detail.tracks {
+                if track.thumbnails.is_empty() || track.thumbnails == old_thumbs {
+                    track.thumbnails = cover_thumbs.clone();
+                }
+            }
+        }
         detail.tracks = playable(&self.api, detail.tracks).await;
         Ok(wire::album_detail(detail))
     }
@@ -390,7 +404,18 @@ impl MusicApi for YouTubeClient {
     }
 
     async fn playlist(&self, playlist_id: &str) -> Result<PlaylistDetail> {
-        let mut detail = self.api.playlist_page(playlist_id).await?;
+        let browse_id = match playlist_id.starts_with("VL") || playlist_id.starts_with("FEmusic") {
+            true => playlist_id.to_owned(),
+            false => format!("VL{playlist_id}"),
+        };
+        let (detail, real_cover) = tokio::join!(
+            self.api.playlist_page(playlist_id),
+            header_cover(&self.api, &browse_id),
+        );
+        let mut detail = detail?;
+        if let Some(cover_thumbs) = real_cover {
+            detail.playlist.thumbnails = cover_thumbs;
+        }
         detail.tracks = playable(&self.api, detail.tracks).await;
         Ok(wire::playlist_detail(detail))
     }
@@ -541,7 +566,28 @@ pub(crate) fn library_playlist(source: ytmusic::Playlist, account: &str) -> Opti
 /// Whether YouTube made playlist `id` itself (liked songs, mixes, albums, episodes), so nobody
 /// can add to it.
 fn generated(id: &str) -> bool {
-    id == "LM" || ["RD", "OLAK", "SE", "LL", "WL"].iter().any(|prefix| id.starts_with(prefix))
+    id == "LM"
+        || ["RD", "OLAK", "SE", "LL", "WL"]
+            .iter()
+            .any(|prefix| id.starts_with(prefix))
+}
+
+/// Reads `header["thumbnail"]` directly from a browse response, avoiding `straplineThumbnail`
+/// (the artist's avatar) which `serde_json`'s alphabetical key order visits first inside
+/// `musicResponsiveHeaderRenderer`.
+async fn header_cover(api: &ytmusic::YtMusic, browse_id: &str) -> Option<Vec<ytmusic::Thumbnail>> {
+    let response = api
+        .execute(
+            "browse",
+            ytmusic::Client::Music,
+            serde_json::json!({ "browseId": browse_id }),
+        )
+        .await
+        .ok()?;
+    let header = ytmusic::parse::find_renderer(&response, "musicResponsiveHeaderRenderer")
+        .or_else(|| ytmusic::parse::find_renderer(&response, "musicDetailHeaderRenderer"))?;
+    let thumbs = ytmusic::parse::thumbnails(header.get("thumbnail")?);
+    (!thumbs.is_empty()).then_some(thumbs)
 }
 
 /// Swaps every music video for the song YouTube Music pairs with it, as `swap_playable` does, and
